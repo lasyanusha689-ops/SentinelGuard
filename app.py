@@ -85,8 +85,7 @@ except Exception as e:
     st.error(f"Unable to read CSV file: {e}")
     st.stop()
 
-required_columns = ["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount', 'Class']
-
+required_columns = ["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount", "Class"]
 missing_columns = [col for col in required_columns if col not in df.columns]
 
 if missing_columns:
