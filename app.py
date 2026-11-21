@@ -468,8 +468,3 @@ st.caption(
     "🛡️ SentinelGuard | Random Forest Machine Learning | "
     "AI Internship Portfolio Project"
 )
-
-st.caption(
-    "Educational demonstration only. "
-    "Not intended for real-world banking decisions."
-)
