@@ -1,0 +1,17 @@
+# Virtual environment
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Dataset
+data/creditcard.csv
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Temporary files
+*.log
+.DS_Storecode 
