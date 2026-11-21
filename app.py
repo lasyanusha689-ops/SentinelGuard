@@ -52,13 +52,12 @@ st.caption("Machine learning powered transaction analysis using Random Forest")
 
 st.divider()
 
-# ---------------- DATASET UPLOAD ----------------
+# ---------------- UPLOAD DATA ----------------
 st.header("📂 Dataset Upload")
 
 uploaded_file = st.file_uploader(
     "Upload creditcard.csv",
-    type=["csv"],
-    key="creditcard_upload"
+    type=["csv"]
 )
 
 if uploaded_file is None:
@@ -75,41 +74,28 @@ if uploaded_file is None:
     """)
     st.stop()
 
-# ---------------- REQUIRED COLUMNS ----------------
-required_columns = (
-    ["Time"]
-    + [f"V{i}" for i in range(1, 29)]
-    + ["Amount", "Class"]
-)
-
-# Use smaller data types to reduce memory
-column_types = {
-    col: np.float32
-    for col in required_columns
-}
-
-# ---------------- CACHED DATA LOADER ----------------
-@st.cache_data(show_spinner=False, max_entries=2)
+# ---------------- FAST DATA LOADING + CACHE ----------------
+@st.cache_data(show_spinner=False)
 def load_data(file_bytes):
+    return pd.read_csv(io.BytesIO(file_bytes))
 
-    data = pd.read_csv(
-        io.BytesIO(file_bytes),
-        dtype=column_types
-    )
-
-    return data
-
-# ---------------- LOAD DATA ----------------
 try:
+    file_bytes = uploaded_file.getvalue()
+
     with st.spinner("Loading dataset... Please wait ⏳"):
-        file_bytes = uploaded_file.getvalue()
         df = load_data(file_bytes)
 
 except Exception as e:
     st.error(f"Unable to read CSV file: {e}")
     st.stop()
 
-# ---------------- VALIDATE COLUMNS ----------------
+# ---------------- CHECK COLUMNS ----------------
+required_columns = (
+    ["Time"]
+    + [f"V{i}" for i in range(1, 29)]
+    + ["Amount", "Class"]
+)
+
 missing_columns = [
     col for col in required_columns
     if col not in df.columns
@@ -123,31 +109,19 @@ if df.empty:
     st.error("Uploaded dataset is empty.")
     st.stop()
 
-# ---------------- VALIDATE CLASS ----------------
 if not df["Class"].isin([0, 1]).all():
     st.error("Class column must contain only 0 (Normal) or 1 (Fraud).")
     st.stop()
 
 # ---------------- DATA SUMMARY ----------------
 total_transactions = len(df)
-
-normal_transactions = int(
-    (df["Class"] == 0).sum()
-)
-
-fraud_transactions = int(
-    (df["Class"] == 1).sum()
-)
+normal_transactions = int((df["Class"] == 0).sum())
+fraud_transactions = int((df["Class"] == 1).sum())
 
 fraud_rate = (
     fraud_transactions / total_transactions * 100
     if total_transactions > 0 else 0
 )
-
-# ---------------- PREPARE SAMPLE DATA ----------------
-# Extract only one sample for prediction
-normal_sample = df.loc[df["Class"] == 0].head(1)
-fraud_sample = df.loc[df["Class"] == 1].head(1)
 
 # ---------------- OVERVIEW ----------------
 st.header("📊 Dataset Overview")
@@ -164,7 +138,7 @@ st.divider()
 # ---------------- TRANSACTION DISTRIBUTION ----------------
 st.subheader("Transaction Distribution")
 
-fig, ax = plt.subplots(figsize=(7, 4))
+fig, ax = plt.subplots()
 
 ax.bar(
     ["Normal", "Fraud"],
@@ -180,37 +154,13 @@ plt.close(fig)
 # ---------------- AMOUNT DISTRIBUTION ----------------
 st.subheader("Transaction Amount Distribution")
 
-# Sampling only for chart rendering
-# Dashboard counts above still use the full dataset
-chart_normal = df.loc[
-    df["Class"] == 0, "Amount"
-]
+fig2, ax2 = plt.subplots()
 
-if len(chart_normal) > 50000:
-    chart_normal = chart_normal.sample(
-        n=50000,
-        random_state=42
-    )
+normal_amounts = df.loc[df["Class"] == 0, "Amount"]
+fraud_amounts = df.loc[df["Class"] == 1, "Amount"]
 
-chart_fraud = df.loc[
-    df["Class"] == 1, "Amount"
-]
-
-fig2, ax2 = plt.subplots(figsize=(7, 4))
-
-ax2.hist(
-    chart_normal,
-    bins=40,
-    alpha=0.6,
-    label="Normal"
-)
-
-ax2.hist(
-    chart_fraud,
-    bins=40,
-    alpha=0.6,
-    label="Fraud"
-)
+ax2.hist(normal_amounts, bins=50, alpha=0.6, label="Normal")
+ax2.hist(fraud_amounts, bins=50, alpha=0.6, label="Fraud")
 
 ax2.set_xlabel("Transaction Amount")
 ax2.set_ylabel("Frequency")
@@ -230,29 +180,22 @@ choice = st.selectbox(
 )
 
 if choice == "Normal Transaction":
-    sample_data = normal_sample
+    sample_data = df[df["Class"] == 0].head(1)
 else:
-    sample_data = fraud_sample
+    sample_data = df[df["Class"] == 1].head(1)
 
 if not sample_data.empty:
 
-    sample = sample_data.drop(
-        columns=["Class"]
-    ).iloc[0]
-
+    sample = sample_data.drop(columns=["Class"]).iloc[0]
     sample_df = pd.DataFrame([sample])
 
     if hasattr(model, "feature_names_in_"):
-        sample_df = sample_df[
-            list(model.feature_names_in_)
-        ]
+        sample_df = sample_df[list(model.feature_names_in_)]
 
     prediction = model.predict(sample_df)[0]
 
     if hasattr(model, "predict_proba"):
-        probability = (
-            model.predict_proba(sample_df)[0][1] * 100
-        )
+        probability = model.predict_proba(sample_df)[0][1] * 100
     else:
         probability = 0
 
@@ -261,10 +204,7 @@ if not sample_data.empty:
     else:
         st.success("✅ Prediction: NORMAL")
 
-    st.metric(
-        "Fraud Probability",
-        f"{probability:.2f}%"
-    )
+    st.metric("Fraud Probability", f"{probability:.2f}%")
 
     st.caption(
         "Prediction generated from a sample transaction "
@@ -305,9 +245,7 @@ with st.form("manual_prediction_form"):
                 key=f"manual_V{i}"
             )
 
-    predict_button = st.form_submit_button(
-        "Analyze Transaction"
-    )
+    predict_button = st.form_submit_button("Analyze Transaction")
 
 if predict_button:
 
@@ -320,16 +258,12 @@ if predict_button:
     input_df = pd.DataFrame([input_data])
 
     if hasattr(model, "feature_names_in_"):
-        input_df = input_df[
-            list(model.feature_names_in_)
-        ]
+        input_df = input_df[list(model.feature_names_in_)]
 
     prediction = model.predict(input_df)[0]
 
     if hasattr(model, "predict_proba"):
-        probability = (
-            model.predict_proba(input_df)[0][1] * 100
-        )
+        probability = model.predict_proba(input_df)[0][1] * 100
     else:
         probability = None
 
@@ -339,10 +273,7 @@ if predict_button:
         st.success("✅ TRANSACTION APPEARS NORMAL")
 
     if probability is not None:
-        st.metric(
-            "Fraud Probability",
-            f"{probability:.2f}%"
-        )
+        st.metric("Fraud Probability", f"{probability:.2f}%")
 
 st.divider()
 
@@ -364,7 +295,4 @@ confusion_matrix_data = pd.DataFrame(
     columns=["Predicted Normal", "Predicted Fraud"]
 )
 
-st.dataframe(
-    confusion_matrix_data,
-    use_container_width=True
-)
+st.dataframe(confusion_matrix_data, use_container_width=True)
