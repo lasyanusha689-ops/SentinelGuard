@@ -38,7 +38,14 @@ div.stButton > button {
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR / "models" / "fraud_model.pkl"
 
-# ---------------- LOAD MODEL ----------------
+# ---------------- REQUIRED COLUMNS ----------------
+required_columns = (
+    ["Time"]
+    + [f"V{i}" for i in range(1, 29)]
+    + ["Amount", "Class"]
+)
+
+# ---------------- LOAD MODEL (CACHED) ----------------
 @st.cache_resource
 def load_model():
     return joblib.load(MODEL_PATH)
@@ -74,10 +81,27 @@ if uploaded_file is None:
     """)
     st.stop()
 
-# ---------------- FAST DATA LOADING + CACHE ----------------
+# ---------------- FAST CSV LOADING ----------------
+# Cache prevents repeated CSV parsing for the same uploaded file.
 @st.cache_data(show_spinner=False)
 def load_data(file_bytes):
-    return pd.read_csv(io.BytesIO(file_bytes))
+
+    # Use smaller data types to reduce cloud memory usage.
+    dtype_map = {
+        "Time": "float32",
+        "Amount": "float32",
+        "Class": "int8"
+    }
+
+    for i in range(1, 29):
+        dtype_map[f"V{i}"] = "float32"
+
+    data = pd.read_csv(
+        io.BytesIO(file_bytes),
+        dtype=dtype_map
+    )
+
+    return data
 
 try:
     file_bytes = uploaded_file.getvalue()
@@ -90,12 +114,6 @@ except Exception as e:
     st.stop()
 
 # ---------------- CHECK COLUMNS ----------------
-required_columns = (
-    ["Time"]
-    + [f"V{i}" for i in range(1, 29)]
-    + ["Amount", "Class"]
-)
-
 missing_columns = [
     col for col in required_columns
     if col not in df.columns
@@ -109,18 +127,25 @@ if df.empty:
     st.error("Uploaded dataset is empty.")
     st.stop()
 
+# ---------------- VALIDATE CLASS ----------------
 if not df["Class"].isin([0, 1]).all():
     st.error("Class column must contain only 0 (Normal) or 1 (Fraud).")
     st.stop()
 
 # ---------------- DATA SUMMARY ----------------
+# Use NumPy for fast counting.
+class_counts = np.bincount(
+    df["Class"].to_numpy(),
+    minlength=2
+)
+
 total_transactions = len(df)
-normal_transactions = int((df["Class"] == 0).sum())
-fraud_transactions = int((df["Class"] == 1).sum())
+normal_transactions = int(class_counts[0])
+fraud_transactions = int(class_counts[1])
 
 fraud_rate = (
     fraud_transactions / total_transactions * 100
-    if total_transactions > 0 else 0
+    if total_transactions else 0
 )
 
 # ---------------- OVERVIEW ----------------
@@ -138,7 +163,7 @@ st.divider()
 # ---------------- TRANSACTION DISTRIBUTION ----------------
 st.subheader("Transaction Distribution")
 
-fig, ax = plt.subplots()
+fig, ax = plt.subplots(figsize=(6, 4))
 
 ax.bar(
     ["Normal", "Fraud"],
@@ -148,26 +173,62 @@ ax.bar(
 ax.set_ylabel("Number of Transactions")
 ax.set_title("Normal vs Fraud Transactions")
 
-st.pyplot(fig)
+st.pyplot(fig, clear_figure=True)
 plt.close(fig)
 
 # ---------------- AMOUNT DISTRIBUTION ----------------
 st.subheader("Transaction Amount Distribution")
 
-fig2, ax2 = plt.subplots()
+# Use a plotting sample of normal transactions only.
+# Dataset counts and other calculations still use ALL records.
+MAX_NORMAL_PLOT_ROWS = 50000
 
-normal_amounts = df.loc[df["Class"] == 0, "Amount"]
-fraud_amounts = df.loc[df["Class"] == 1, "Amount"]
+normal_amounts = df.loc[
+    df["Class"] == 0, "Amount"
+].to_numpy()
 
-ax2.hist(normal_amounts, bins=50, alpha=0.6, label="Normal")
-ax2.hist(fraud_amounts, bins=50, alpha=0.6, label="Fraud")
+fraud_amounts = df.loc[
+    df["Class"] == 1, "Amount"
+].to_numpy()
+
+if len(normal_amounts) > MAX_NORMAL_PLOT_ROWS:
+    rng = np.random.default_rng(42)
+
+    normal_plot_amounts = rng.choice(
+        normal_amounts,
+        size=MAX_NORMAL_PLOT_ROWS,
+        replace=False
+    )
+else:
+    normal_plot_amounts = normal_amounts
+
+fig2, ax2 = plt.subplots(figsize=(7, 4))
+
+ax2.hist(
+    normal_plot_amounts,
+    bins=50,
+    alpha=0.6,
+    label="Normal"
+)
+
+ax2.hist(
+    fraud_amounts,
+    bins=50,
+    alpha=0.6,
+    label="Fraud"
+)
 
 ax2.set_xlabel("Transaction Amount")
 ax2.set_ylabel("Frequency")
 ax2.legend()
 
-st.pyplot(fig2)
+st.pyplot(fig2, clear_figure=True)
 plt.close(fig2)
+
+st.caption(
+    "Amount distribution chart uses sampled normal transactions "
+    "for faster visualization. Dataset statistics use all records."
+)
 
 st.divider()
 
@@ -179,16 +240,21 @@ choice = st.selectbox(
     ["Normal Transaction", "Fraud Transaction"]
 )
 
-if choice == "Normal Transaction":
-    sample_data = df[df["Class"] == 0].head(1)
-else:
-    sample_data = df[df["Class"] == 1].head(1)
+# Select only the first matching row instead of creating
+# a full filtered DataFrame.
+target_class = 0 if choice == "Normal Transaction" else 1
 
-if not sample_data.empty:
+sample_index = df["Class"].eq(target_class).idxmax() \
+    if df["Class"].eq(target_class).any() else None
 
-    sample = sample_data.drop(columns=["Class"]).iloc[0]
-    sample_df = pd.DataFrame([sample])
+if sample_index is not None:
 
+    sample_df = df.loc[
+        [sample_index],
+        required_columns[:-1]
+    ].copy()
+
+    # Match the exact feature order used during model training.
     if hasattr(model, "feature_names_in_"):
         sample_df = sample_df[list(model.feature_names_in_)]
 
@@ -295,4 +361,7 @@ confusion_matrix_data = pd.DataFrame(
     columns=["Predicted Normal", "Predicted Fraud"]
 )
 
-st.dataframe(confusion_matrix_data, use_container_width=True)
+st.dataframe(
+    confusion_matrix_data,
+    use_container_width=True
+)
